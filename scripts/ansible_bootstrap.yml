@@ -1,0 +1,42 @@
+---
+- name: Bootstrap Ansible and Set Up SSH Agent Forwarding
+  hosts: localhost
+  become: yes
+  tasks:
+    - name: Install Python (required for Ansible)
+      apt:
+        name: python
+        state: present
+        update_cache: yes
+
+    - name: Install Ansible
+      apt:
+        name: ansible
+        state: present
+        update_cache: yes
+
+    - name: Enable SSH Agent Forwarding
+      lineinfile:
+        dest: /etc/ssh/ssh_config
+        regexp: "^  ForwardAgent no$"
+        line: "  ForwardAgent yes"
+
+- name: Create Hosts File
+  hosts: localhost
+  become: yes
+  tasks:
+    - name: Create hosts file
+      copy:
+        content: |
+          [jenkins-master]
+          {{ jenkins_master_ip }}
+
+          [jenkins-master:vars]
+          ansible_user=ubuntu
+
+          [jenkins-slave]
+          {{ jenkins_slave_ip }}
+
+          [jenkins-slave:vars]
+          ansible_user=ubuntu
+        dest: /opt/hosts

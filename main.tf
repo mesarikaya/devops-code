@@ -3,19 +3,55 @@ provider "aws" {
   region = var.region
 }
 
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+data "aws_secretsmanager_secret_version" "ec2_private_key" {
+  secret_id = "dev/ssh_private_key" # Replace with the correct secret name
+}
+
+locals {
+  private_key = data.aws_secretsmanager_secret_version.ec2_private_key.secret_string
+}
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.1.2"
+
+  name = var.vpc_name
+  cidr = var.vpc_cidr
+
+  azs             = slice(data.aws_availability_zones.available.names, 0, 1)
+  private_subnets = slice(var.vpc_private_subnets, 0, 2)
+  public_subnets  = slice(var.vpc_public_subnets, 0, 2)
+
+  enable_nat_gateway      = var.vpc_enable_nat_gateway
+  enable_vpn_gateway      = false
+  map_public_ip_on_launch = true
+
+  create_igw = true
+
+  tags     = merge(local.common_tags, var.vpc_tags)
+  igw_tags = merge(local.common_tags, var.vpc_igw_tags)
+}
+
 # Create an AMI data for latest linux image from amazon
 data "aws_ami" "latest_amazon_linux_x86" {
   most_recent = true
-
   filter {
+    name   = "image-id"
+    values = ["ami-05ccf7ebc9a8216aa"]
+  }
+  /* filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-2.0.*-x86_64-gp2"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu-lunar-23.04-amd64-server-*"]
   }
 
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
-  }
+  } */
 
   owners = ["amazon"]
 }
@@ -24,36 +60,309 @@ resource "aws_key_pair" "ec2_key_pair" {
   key_name   = "ec2_key_pair"
   public_key = file(var.ec2_public_key)
 }
-
-resource "aws_security_group" "ec2_instance_sg" {
+/* 
+resource "aws_security_group" "ec2_instance_ssh_sg" {
   name_prefix = "ec2-"
-  description = "Security group for EC2 instances"
-  tags = {
+  description = "Security group for EC2 instances ssh connection"
+  vpc_id      = module.vpc.vpc_id
+  tags = merge(local.common_tags, {
     Name = "ssh-port"
-  }
+  })
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ec2_ssh_inbound" {
-  security_group_id = aws_security_group.ec2_instance_sg.id
+  security_group_id = aws_security_group.ec2_instance_ssh_sg.id
   from_port         = 22
   to_port           = 22
   ip_protocol       = "tcp"
   cidr_ipv4         = "0.0.0.0/0"
 }
 
+resource "aws_security_group" "ec2_instance_http_sg" {
+  name_prefix = "ec2-"
+  description = "Security group for EC2 instances http connection"
+  vpc_id      = module.vpc.vpc_id
+  tags = merge(local.common_tags, {
+    Name = "http-ports"
+  })
+}
+
+
+resource "aws_vpc_security_group_ingress_rule" "ec2_http_inbound" {
+  count             = length(var.allowed_http_ports)
+  security_group_id = aws_security_group.ec2_instance_http_sg.id
+  from_port         = element(var.allowed_http_ports, count.index)
+  to_port           = element(var.allowed_http_ports, count.index)
+  ip_protocol       = "tcp"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+
 resource "aws_vpc_security_group_egress_rule" "ec2_ssh_outbound" {
-  security_group_id = aws_security_group.ec2_instance_sg.id
+  security_group_id = aws_security_group.ec2_instance_ssh_sg.id
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
 }
 
-resource "aws_instance" "linux_instance" {
-  ami                    = data.aws_ami.latest_amazon_linux_x86.id
-  instance_type          = "t3.micro"
-  key_name               = aws_key_pair.ec2_key_pair.key_name
-  vpc_security_group_ids = [aws_security_group.ec2_instance_sg.id]
+resource "aws_vpc_security_group_egress_rule" "ec2_tcp_outbound" {
+  security_group_id = aws_security_group.ec2_instance_http_sg.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+} */
 
-  tags = {
-    Name = "InitialEC2Instance"
+# Create Jenkins master and slave instances
+resource "aws_instance" "jenkins_instance" {
+  count         = var.jenkins_ec2_instance_count
+  ami           = data.aws_ami.latest_amazon_linux_x86.id
+  instance_type = "t3.micro"
+  vpc_security_group_ids = [
+    module.ssh_security.security_group_id,
+    module.http_security.security_group_id
+  ]
+  subnet_id = module.vpc.public_subnets[0]
+  key_name  = aws_key_pair.ec2_key_pair.key_name
+  tags = merge(local.common_tags, {
+    Name = "${var.jenkins_instance_names[count.index]}"
+  })
+}
+
+#Create Ansible Instance
+resource "aws_instance" "ansible_control_plane" {
+  ami           = data.aws_ami.latest_amazon_linux_x86.id
+  instance_type = "t3.micro"
+  vpc_security_group_ids = [
+    module.ssh_security.security_group_id,
+  ]
+  subnet_id = module.vpc.public_subnets[0]
+  key_name  = aws_key_pair.ec2_key_pair.key_name
+
+  tags = merge(local.common_tags, {
+    Name = "ansible"
+  })
+
+  depends_on = [
+    aws_instance.jenkins_instance
+  ]
+
+  user_data                   = file("scripts/ansible_setup.sh")
+  user_data_replace_on_change = true
+}
+
+#Transfer private key to allow ansible control the nodes"
+resource "null_resource" "transfer_private_key" {
+  triggers = {
+    ansible_instance_created = "${aws_instance.ansible_control_plane.id}"
   }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/.private/ec2_key_pair"
+    destination = "/tmp/ec2_key_pair.pem"
+  }
+
+  # Move private key
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/ec2_key_pair.pem /opt/ec2_key_pair.pem",
+      "sudo chown root:root /opt/ec2_key_pair.pem",
+      "sudo chmod 400 /opt/ec2_key_pair.pem"
+    ]
+  }
+
+  depends_on = [aws_instance.ansible_control_plane, aws_instance.jenkins_instance]
+}
+
+# Generate host file to register the managed nodes"
+resource "null_resource" "generate_hosts_file" {
+
+  triggers = {
+    ansible_instance_created        = "${aws_instance.ansible_control_plane.id}"
+    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
+    jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  provisioner "local-exec" {
+    command = "bash scripts/prepare_ansible_instance.sh"
+    environment = {
+      ANSIBLE_IP       = aws_instance.ansible_control_plane.public_ip
+      JENKINS_IP       = aws_instance.jenkins_instance[0].private_ip
+      JENKINS_SLAVE_IP = aws_instance.jenkins_instance[1].private_ip
+    }
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/hosts"
+    destination = "/tmp/hosts"
+  }
+
+  # Install ansible
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/hosts /opt/hosts",
+      "sudo chown root:root /opt/hosts"
+    ]
+  }
+
+  # "sudo chmod 400 /opt/ec2_key_pair.pem"
+  depends_on = [aws_instance.ansible_control_plane, aws_instance.jenkins_instance[0], aws_instance.jenkins_instance[1]]
+}
+
+
+# Transfer playbooks 
+resource "null_resource" "transfer_jenkins_master_playbook_and_run" {
+  triggers = {
+    jenkins_master_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-master-setup.yml"))
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  # Transfer jenkins playbook
+  provisioner "file" {
+    source      = "${path.module}/ansible/playbooks/jenkins-master-setup.yml"
+    destination = "/tmp/jenkins-master-setup.yml"
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/jenkins-master-setup.yml /opt/jenkins-master-setup.yml",
+      "sudo chown root:root /opt/jenkins-master-setup.yml",
+    ]
+  }
+
+  depends_on = [aws_instance.ansible_control_plane]
+}
+
+resource "null_resource" "transfer_jenkins_slave_playbook_and_run" {
+  triggers = {
+    jenkins_slave_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-setup.yml"))
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  # Transfer jenkins playbook
+  provisioner "file" {
+    source      = "${path.module}/ansible/playbooks/jenkins-slave-setup.yml"
+    destination = "/tmp/jenkins-slave-setup.yml"
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/jenkins-slave-setup.yml /opt/jenkins-slave-setup.yml",
+      "sudo chown root:root /opt/jenkins-slave-setup.yml",
+    ]
+  }
+
+  depends_on = [aws_instance.ansible_control_plane]
+}
+
+resource "null_resource" "install_jenkins" {
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+
+  /* triggers = {
+    ansible_instance_created        = "${aws_instance.ansible_control_plane.id}"
+    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
+    jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
+    install_jenkins_created         = "${null_resource.transfer_jenkins_playbook.id}"
+  } */
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  #install jenkins
+  provisioner "remote-exec" {
+
+    inline = [
+      "while [ ! -x $(command -v ansible-playbook) ]; do",
+      "  echo 'Waiting for Ansible to become available...'",
+      "  sleep 5",
+      "done",
+      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-master-setup.yml",
+      "echo 'Jenkins master installation Complete'",
+      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-setup.yml",
+      "echo 'Jenkins slave installation Complete'"
+    ]
+  }
+
+  depends_on = [aws_instance.ansible_control_plane,
+    aws_instance.jenkins_instance[0],
+    aws_instance.jenkins_instance[1],
+    null_resource.generate_hosts_file,
+    null_resource.transfer_jenkins_master_playbook_and_run,
+  null_resource.transfer_jenkins_slave_playbook_and_run]
+}
+
+module "ssh_security" {
+  source        = "./modules/security_groups"
+  vpc_id        = module.vpc.vpc_id
+  allowed_ports = var.allowed_ssh_ports
+}
+
+module "http_security" {
+  source        = "./modules/security_groups"
+  vpc_id        = module.vpc.vpc_id
+  allowed_ports = var.allowed_http_ports
+}
+
+moved {
+  from = aws_security_group.ec2_instance_ssh_sg
+  to   = module.ssh_security.aws_security_group.security_group
+}
+
+moved {
+  from = aws_vpc_security_group_ingress_rule.ec2_ssh_inbound
+  to   = module.ssh_security.aws_vpc_security_group_ingress_rule.ingress_rule
+}
+
+moved {
+  from = aws_security_group.ec2_instance_http_sg
+  to   = module.http_security.aws_security_group.security_group
+}
+
+moved {
+  from = aws_vpc_security_group_ingress_rule.ec2_tcp_inbound
+  to   = module.http_security.aws_vpc_security_group_ingress_rule.ingress_rule
+}
+
+moved {
+  from = aws_vpc_security_group_egress_rule.ec2_ssh_outbound
+  to   = module.ssh_security.aws_vpc_security_group_egress_rule.eggress_rule
+}
+
+moved {
+  from = aws_vpc_security_group_egress_rule.ec2_tcp_outbound
+  to   = module.http_security.aws_vpc_security_group_egress_rule.eggress_rule
 }

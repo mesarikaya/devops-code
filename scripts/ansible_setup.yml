@@ -1,0 +1,17 @@
+#cloud-config
+
+package_upgrade: true
+runcmd:
+  - apt update
+  - apt install -y python
+  - apt install -y ansible
+  - |
+    # Enable SSH Agent Forwarding
+    if [ ! -f ~/.ssh/config ]; then
+        mkdir -p ~/.ssh
+        touch ~/.ssh/config
+        chown ubuntu:ubuntu ~/.ssh/config
+        chmod 600 ~/.ssh/config
+    fi
+    grep -q "ForwardAgent yes" ~/.ssh/config || echo "Host *" >> ~/.ssh/config
+    grep -q "ForwardAgent yes" ~/.ssh/config || echo "    ForwardAgent yes" >> ~/.ssh/config

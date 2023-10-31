@@ -1,0 +1,52 @@
+---
+- hosts: jenkins-slave
+  become: true
+  tasks:
+    - name: Update Ubuntu Repo and cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Uninstall Old Java
+      apt:
+        name: openjdk-21-jre
+        state: absent
+      ignore_errors: true
+
+    - name: Install OpenJDK 17
+      apt:
+        name: openjdk-17-jre
+        state: present
+
+    - name: Download Maven Packages
+      get_url:
+        url: https://dlcdn.apache.org/maven/maven-3/3.9.5/binaries/apache-maven-3.9.5-bin.tar.gz
+        dest: /opt
+
+    - name: Unarchive a file that is already on the remote machine
+      ansible.builtin.unarchive:
+        src: /opt/apache-maven-3.9.5-bin.tar.gz
+        dest: /opt
+        remote_src: yes
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Start and enable Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Give 777 permissions on /var/run/docker.sock
+      file:
+        path: /var/run/docker.sock
+        state: file
+        mode: 0777
+
+    - name: Start docker on boot time
+      service:
+        name: docker
+        enabled: true

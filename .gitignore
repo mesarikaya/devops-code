@@ -29,3 +29,8 @@ terraform.rc
 
 # Exclude .plan files, which can contain sensitive information
 *.plan
+
+**/*.private
+*.env
+
+*secrets.auto.tfvars
