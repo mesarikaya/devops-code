@@ -1,0 +1,48 @@
+---
+- hosts: jenkins_slave
+  become: true
+
+  vars:
+    aws_secret_name: dev/infra
+
+  tasks:
+    - name: Install kubectl
+      become: true
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+      register: kubectl_install
+
+    - name: Install aws-cli
+      become: true
+      apt:
+        name: awscli
+        state: present
+      when: kubectl_install is succeeded
+
+    - name: Retrieve the AWS credentials from the AWS Secrets Manager
+      aws_secretsmanager_secret:
+        name: "{{ aws_secret_name }}"
+        state: present
+      register: secret
+
+    - name: Set the AWS environment variables
+      set_fact:
+        AWS_ACCESS_KEY_ID: "{{ secret.secret_string.AWS_ACCESS_KEY_ID }}"
+        AWS_SECRET_ACCESS_KEY: "{{ secret.secret_string.AWS_SECRET_ACCESS_KEY }}"
+        AWS_DEFAULT_REGION: "{{ secret.secret_string.AWS_DEFAULT_REGION }}"
+
+    - name: Configure the Jenkins slave instance to use the AWS CLI and the Kubernetes CLI
+      file:
+        path: ~/.bashrc
+        content: |
+          export AWS_ACCESS_KEY_ID={{ AWS_ACCESS_KEY_ID }}
+          export AWS_SECRET_ACCESS_KEY={{ AWS_SECRET_ACCESS_KEY }}
+          export AWS_DEFAULT_REGION={{ AWS_DEFAULT_REGION }}
+          export KUBECONFIG=/tmp/kubeconfig
+
+        state: present
+        owner: jenkins
+        group: jenkins
+        mode: 0644

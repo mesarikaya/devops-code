@@ -1,3 +1,15 @@
+# Define a local block to compute the tags
+locals {
+  common_tags = {
+    Terraform   = "true"
+    Environment = var.environment
+    Project     = "devops-code-project"
+  }
+  kubernetes_tags = {
+    cluster_name = "devops-kubernetes-${var.environment}"
+  }
+}
+
 # Configure the AWS Provider
 provider "aws" {
   region = var.region
@@ -68,6 +80,11 @@ module "http_security" {
   allowed_ports = var.allowed_http_ports
 }
 
+# Create iam role to jenkins instance to be able to do actions on ec2 instances
+module "iam_jenkins_role" {
+  source = "./modules/iam"
+}
+
 # Create Jenkins master and slave instances
 resource "aws_instance" "jenkins_instance" {
   count         = var.jenkins_ec2_instance_count
@@ -77,8 +94,10 @@ resource "aws_instance" "jenkins_instance" {
     module.ssh_security.security_group_id,
     module.http_security.security_group_id
   ]
-  subnet_id = module.vpc.public_subnets[0]
-  key_name  = aws_key_pair.ec2_key_pair.key_name
+  subnet_id            = module.vpc.public_subnets[0]
+  key_name             = aws_key_pair.ec2_key_pair.key_name
+  iam_instance_profile = module.iam_jenkins_role.iam_jenkins_instance_profile_name
+
   tags = merge(local.common_tags, {
     Name = "${var.jenkins_instance_names[count.index]}"
   })
@@ -182,7 +201,7 @@ resource "null_resource" "generate_hosts_file" {
 
 
 # Transfer playbooks 
-resource "null_resource" "transfer_jenkins_master_playbook_and_run" {
+resource "null_resource" "transfer_jenkins_master_playbook" {
   triggers = {
     jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
     jenkins_master_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-master-setup.yml"))
@@ -212,7 +231,7 @@ resource "null_resource" "transfer_jenkins_master_playbook_and_run" {
   depends_on = [aws_instance.ansible_control_plane]
 }
 
-resource "null_resource" "transfer_jenkins_slave_playbook_and_run" {
+resource "null_resource" "transfer_jenkins_slave_playbook" {
   triggers = {
     jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
     jenkins_slave_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-setup.yml"))
@@ -244,16 +263,16 @@ resource "null_resource" "transfer_jenkins_slave_playbook_and_run" {
 
 resource "null_resource" "install_jenkins" {
 
-  triggers = {
+  /*   triggers = {
     always_run = "${timestamp()}"
-  }
+  } */
 
-  /* triggers = {
-    ansible_instance_created        = "${aws_instance.ansible_control_plane.id}"
+  triggers = {
     jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
     jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
-    install_jenkins_created         = "${null_resource.transfer_jenkins_playbook.id}"
-  } */
+    install_jenkins_created         = "${null_resource.transfer_jenkins_master_playbook.id}"
+    install_slave_jenkins_created   = "${null_resource.transfer_jenkins_slave_playbook.id}"
+  }
 
   connection {
     type        = "ssh"
@@ -281,10 +300,60 @@ resource "null_resource" "install_jenkins" {
     aws_instance.jenkins_instance[0],
     aws_instance.jenkins_instance[1],
     null_resource.generate_hosts_file,
-    null_resource.transfer_jenkins_master_playbook_and_run,
-  null_resource.transfer_jenkins_slave_playbook_and_run]
+    null_resource.transfer_jenkins_master_playbook,
+  null_resource.transfer_jenkins_slave_playbook]
 }
 
+/* 
+# Setup Kubernetes Cluster
+module "kubernetes_cluster" {
+  source          = "./modules/eks"
+  kubernetes_tags = local.kubernetes_tags
+
+  vpc_id                    = module.vpc.vpc_id
+  private_subnets           = module.vpc.private_subnets
+  has_cluster_public_access = true
+}
+
+resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" {
+  triggers = {
+    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
+    jenkins_slave_install_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-install-clis.yml"))
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  # Transfer jenkins playbook
+  provisioner "file" {
+    source      = "${path.module}/ansible/playbooks/jenkins-slave-install-clis.yml"
+    destination = "/tmp/jenkins-slave-install-clis.yml"
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/jenkins-slave-install-clis.yml /opt/jenkins-slave-install-clis.yml",
+      "sudo chown root:root /opt/jenkins-slave-install-clis.yml",
+    ]
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-clis.yml",
+      "echo 'AWS CLI and Kubectl CLI installation on Jenkins slave instance is Complete'"
+    ]
+  }
+
+  depends_on = [aws_instance.ansible_control_plane, module.kubernetes_cluster]
+}
+
+ */
 moved {
   from = aws_security_group.ec2_instance_ssh_sg
   to   = module.ssh_security.aws_security_group.security_group

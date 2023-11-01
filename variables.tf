@@ -19,15 +19,6 @@ variable "allowed_ssh_ports" {
   default = [22]
 }
 
-# Define a local block to compute the tags
-locals {
-  common_tags = {
-    Terraform   = "true"
-    Environment = var.environment
-    Project     = "devops-code-project"
-  }
-}
-
 variable "vpc_name" {
   default     = "devops-vpc"
   description = "Separate VPC for devops pipeline"
@@ -41,7 +32,7 @@ variable "vpc_cidr" {
 }
 
 variable "vpc_private_subnets" {
-  default     = ["10.0.1.0/24", "10.0.2.0/24"]
+  default     = ["10.0.3.0/24", "10.0.4.0/24"]
   description = "Private subnet for VPC"
   type        = list(string)
 }

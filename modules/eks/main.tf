@@ -4,13 +4,11 @@ module "eks" {
 
   cluster_name    = var.kubernetes_tags.cluster_name
 
-  vpc_id                         = module.vpc.vpc_id
-  subnet_ids                     = module.vpc.private_subnets
-  cluster_endpoint_public_access = true
-
+  vpc_id                         = var.vpc_id
+  subnet_ids                     = var.private_subnets
+  cluster_endpoint_public_access = var.has_cluster_public_access
   eks_managed_node_group_defaults = {
     ami_type = "AL2_x86_64"
-
   }
 
   eks_managed_node_groups = {
@@ -36,7 +34,6 @@ module "eks" {
   }
 }
 
-
 # https://aws.amazon.com/blogs/containers/amazon-ebs-csi-driver-is-now-generally-available-in-amazon-eks-add-ons/ 
 data "aws_iam_policy" "ebs_csi_policy" {
   arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
@@ -56,7 +53,7 @@ module "irsa-ebs-csi" {
 resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
-  addon_version            = "v1.20.0-eksbuild.1"
+  addon_version            = "v1.24.0-eksbuild.1"
   service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
   tags = {
     "eks_addon" = "ebs-csi"
