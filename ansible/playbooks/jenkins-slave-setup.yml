@@ -7,12 +7,6 @@
         update_cache: yes
         cache_valid_time: 3600
 
-    - name: Uninstall Old Java
-      apt:
-        name: openjdk-21-jre
-        state: absent
-      ignore_errors: true
-
     - name: Install OpenJDK 17
       apt:
         name: openjdk-17-jre

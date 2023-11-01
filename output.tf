@@ -1,3 +1,7 @@
+output "availability_zones" {
+  value = data.aws_availability_zones.available.names
+}
+
 output "jenkins_ec2_public_ip" {
   description = "The Public IP address used to access jenkins related EC2 instances"
   value       = aws_instance.jenkins_instance[*].public_ip

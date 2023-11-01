@@ -57,10 +57,17 @@ variable "vpc_enable_nat_gateway" {
   type        = bool
   default     = true
 }
-variable "ec2_public_key" {
-  type        = string
-  default     = ".ssh/ec2_key_pair.pub"
-  description = "ec2 key pair public key"
+
+variable "vpc_single_nat_gateway" {
+  description = "Single NAT gateway for VPC"
+  type        = bool
+  default     = true
+}
+
+variable "vpc_enable_dns_hostnames" {
+  description = "Enable DNS hostnames for VPC"
+  type        = bool
+  default     = true
 }
 
 variable "vpc_tags" {
@@ -77,6 +84,12 @@ variable "vpc_igw_tags" {
   default = {
     Name = "devops-igw"
   }
+}
+
+variable "ec2_public_key" {
+  type        = string
+  default     = ".ssh/ec2_key_pair.pub"
+  description = "ec2 key pair public key"
 }
 
 variable "jenkins_ec2_instance_count" {

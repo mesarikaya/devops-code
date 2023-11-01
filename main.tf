@@ -15,25 +15,20 @@ locals {
   private_key = data.aws_secretsmanager_secret_version.ec2_private_key.secret_string
 }
 
+
 module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.1.2"
-
-  name = var.vpc_name
-  cidr = var.vpc_cidr
-
-  azs             = slice(data.aws_availability_zones.available.names, 0, 1)
-  private_subnets = slice(var.vpc_private_subnets, 0, 2)
-  public_subnets  = slice(var.vpc_public_subnets, 0, 2)
-
-  enable_nat_gateway      = var.vpc_enable_nat_gateway
-  enable_vpn_gateway      = false
-  map_public_ip_on_launch = true
-
-  create_igw = true
-
-  tags     = merge(local.common_tags, var.vpc_tags)
-  igw_tags = merge(local.common_tags, var.vpc_igw_tags)
+  source                   = "./modules/vpc"
+  vpc_name                 = var.vpc_name
+  vpc_cidr                 = var.vpc_cidr
+  vpc_azs                  = data.aws_availability_zones.available.names
+  vpc_private_subnets      = var.vpc_private_subnets
+  vpc_public_subnets       = var.vpc_public_subnets
+  vpc_enable_nat_gateway   = var.vpc_enable_nat_gateway
+  vpc_single_nat_gateway   = var.vpc_single_nat_gateway
+  vpc_enable_dns_hostnames = var.vpc_enable_dns_hostnames
+  vpc_common_tags          = local.common_tags
+  vpc_tags                 = var.vpc_tags
+  vpc_igw_tags             = var.vpc_igw_tags
 }
 
 # Create an AMI data for latest linux image from amazon
@@ -60,55 +55,18 @@ resource "aws_key_pair" "ec2_key_pair" {
   key_name   = "ec2_key_pair"
   public_key = file(var.ec2_public_key)
 }
-/* 
-resource "aws_security_group" "ec2_instance_ssh_sg" {
-  name_prefix = "ec2-"
-  description = "Security group for EC2 instances ssh connection"
-  vpc_id      = module.vpc.vpc_id
-  tags = merge(local.common_tags, {
-    Name = "ssh-port"
-  })
+
+module "ssh_security" {
+  source        = "./modules/security_groups"
+  vpc_id        = module.vpc.vpc_id
+  allowed_ports = var.allowed_ssh_ports
 }
 
-resource "aws_vpc_security_group_ingress_rule" "ec2_ssh_inbound" {
-  security_group_id = aws_security_group.ec2_instance_ssh_sg.id
-  from_port         = 22
-  to_port           = 22
-  ip_protocol       = "tcp"
-  cidr_ipv4         = "0.0.0.0/0"
+module "http_security" {
+  source        = "./modules/security_groups"
+  vpc_id        = module.vpc.vpc_id
+  allowed_ports = var.allowed_http_ports
 }
-
-resource "aws_security_group" "ec2_instance_http_sg" {
-  name_prefix = "ec2-"
-  description = "Security group for EC2 instances http connection"
-  vpc_id      = module.vpc.vpc_id
-  tags = merge(local.common_tags, {
-    Name = "http-ports"
-  })
-}
-
-
-resource "aws_vpc_security_group_ingress_rule" "ec2_http_inbound" {
-  count             = length(var.allowed_http_ports)
-  security_group_id = aws_security_group.ec2_instance_http_sg.id
-  from_port         = element(var.allowed_http_ports, count.index)
-  to_port           = element(var.allowed_http_ports, count.index)
-  ip_protocol       = "tcp"
-  cidr_ipv4         = "0.0.0.0/0"
-}
-
-
-resource "aws_vpc_security_group_egress_rule" "ec2_ssh_outbound" {
-  security_group_id = aws_security_group.ec2_instance_ssh_sg.id
-  ip_protocol       = "-1"
-  cidr_ipv4         = "0.0.0.0/0"
-}
-
-resource "aws_vpc_security_group_egress_rule" "ec2_tcp_outbound" {
-  security_group_id = aws_security_group.ec2_instance_http_sg.id
-  ip_protocol       = "-1"
-  cidr_ipv4         = "0.0.0.0/0"
-} */
 
 # Create Jenkins master and slave instances
 resource "aws_instance" "jenkins_instance" {
@@ -226,7 +184,8 @@ resource "null_resource" "generate_hosts_file" {
 # Transfer playbooks 
 resource "null_resource" "transfer_jenkins_master_playbook_and_run" {
   triggers = {
-    jenkins_master_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-master-setup.yml"))
+    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
+    jenkins_master_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-master-setup.yml"))
   }
 
   connection {
@@ -255,7 +214,8 @@ resource "null_resource" "transfer_jenkins_master_playbook_and_run" {
 
 resource "null_resource" "transfer_jenkins_slave_playbook_and_run" {
   triggers = {
-    jenkins_slave_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-setup.yml"))
+    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
+    jenkins_slave_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-setup.yml"))
   }
 
   connection {
@@ -323,18 +283,6 @@ resource "null_resource" "install_jenkins" {
     null_resource.generate_hosts_file,
     null_resource.transfer_jenkins_master_playbook_and_run,
   null_resource.transfer_jenkins_slave_playbook_and_run]
-}
-
-module "ssh_security" {
-  source        = "./modules/security_groups"
-  vpc_id        = module.vpc.vpc_id
-  allowed_ports = var.allowed_ssh_ports
-}
-
-module "http_security" {
-  source        = "./modules/security_groups"
-  vpc_id        = module.vpc.vpc_id
-  allowed_ports = var.allowed_http_ports
 }
 
 moved {
