@@ -8,6 +8,9 @@ locals {
   kubernetes_tags = {
     cluster_name = "devops-kubernetes-${var.environment}"
   }
+  security_group_tags = {
+    name = "security_group-${var.environment}"
+  }
 }
 
 # Configure the AWS Provider
@@ -19,13 +22,14 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_secretsmanager_secret_version" "ec2_private_key" {
+/* data "aws_secretsmanager_secret_version" "ec2_private_key" {
   secret_id = "dev/ssh_private_key" # Replace with the correct secret name
-}
+  }
 
 locals {
   private_key = data.aws_secretsmanager_secret_version.ec2_private_key.secret_string
 }
+ */
 
 
 module "vpc" {
@@ -69,15 +73,19 @@ resource "aws_key_pair" "ec2_key_pair" {
 }
 
 module "ssh_security" {
-  source        = "./modules/security_groups"
-  vpc_id        = module.vpc.vpc_id
-  allowed_ports = var.allowed_ssh_ports
+  source              = "./modules/security_groups"
+  security_group_name = "${local.security_group_tags.name}-ssh"
+  vpc_id              = module.vpc.vpc_id
+  allowed_ports       = var.allowed_ssh_ports
+  security_group_tags = merge(local.common_tags, local.security_group_tags)
 }
 
 module "http_security" {
-  source        = "./modules/security_groups"
-  vpc_id        = module.vpc.vpc_id
-  allowed_ports = var.allowed_http_ports
+  source              = "./modules/security_groups"
+  security_group_name = "${local.security_group_tags.name}-tcp"
+  vpc_id              = module.vpc.vpc_id
+  allowed_ports       = var.allowed_http_ports
+  security_group_tags = merge(local.common_tags, local.security_group_tags)
 }
 
 # Create iam role to jenkins instance to be able to do actions on ec2 instances
@@ -308,7 +316,7 @@ resource "null_resource" "install_jenkins" {
 # Setup Kubernetes Cluster
 module "kubernetes_cluster" {
   source          = "./modules/eks"
-  kubernetes_tags = local.kubernetes_tags
+  kubernetes_tags = security_group_tags =  merge(local.common_tags, local.kubernetes_tags)
 
   vpc_id                    = module.vpc.vpc_id
   private_subnets           = module.vpc.private_subnets

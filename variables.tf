@@ -46,13 +46,13 @@ variable "vpc_public_subnets" {
 variable "vpc_enable_nat_gateway" {
   description = "Enable NAT gateway for VPC"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "vpc_single_nat_gateway" {
   description = "Single NAT gateway for VPC"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "vpc_enable_dns_hostnames" {
