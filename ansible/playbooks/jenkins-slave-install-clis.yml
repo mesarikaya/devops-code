@@ -3,30 +3,38 @@
   become: true
 
   tasks:
-    - name: Install kubectl
+    - name: Check if kubectl is installed
+      shell: kubectl version --client
+      ignore_errors: true
+      register: kubectl_check
+
+    - name: Install kubectl if not installed
       shell: |
         curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
         chmod +x kubectl
         sudo mv kubectl /usr/local/bin/
-      register: kubectl_install
+      when: kubectl_check.rc != 0
 
     - name: Install unzip on Ubuntu
       apt:
         name: unzip
 
-    - name: Install AWSCLI
+    - name: Check if AWS CLI is installed
+      shell: aws --version
+      ignore_errors: true
+      register: awscli_check
+
+    - name: Install AWS CLI if not installed
       shell: |
-        sudo yum remove awscli
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
         unzip awscliv2.zip
-        sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-        aws --version
-      register: awscli_install
+        sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli
+      when: awscli_check.rc != 0
 
     - name: Configure kubectl for EKS as root
       shell: |
         aws eks --region {{ aws_region }} update-kubeconfig --name {{ eks_cluster_name }}
-      when: kubectl_install.rc == 0 # Only run if kubectl installation was successful
+      when: awscli_check.rc == 0 and kubectl_check.rc == 0 # Only run if kubectl and awscli installation was successful
       register: kubectl_config_output
       become: true
       become_user: ubuntu
