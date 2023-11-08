@@ -6,10 +6,22 @@ locals {
     Project     = "devops-code-project"
   }
   kubernetes_tags = {
-    cluster_name = "devops-kubernetes-${var.environment}"
+    cluster_name = "devops-cluster-${var.environment}"
   }
   security_group_tags = {
     name = "security_group-${var.environment}"
+  }
+
+  public_subnet_tags = {
+    "devops/infra/devops-kubernetes-${var.environment}" = "shared"
+    "kubernetes.io/role/elb"                            = 1
+    "type"                                              = "public"
+  }
+
+  private_subnet_tags = {
+    "devops/infra/devops-kubernetes-${var.environment}" = "shared"
+    "kubernetes.io/role/internal-elb"                   = 1
+    "type"                                              = "private"
   }
 }
 
@@ -20,13 +32,18 @@ provider "aws" {
 
 data "aws_availability_zones" "available" {
   state = "available"
+
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
 }
 
-/* data "aws_secretsmanager_secret_version" "ec2_private_key" {
-  secret_id = "dev/ssh_private_key" # Replace with the correct secret name
-  }
+data "aws_secretsmanager_secret_version" "ec2_private_key" {
+  secret_id = "dev/infra"
+}
 
-locals {
+/*locals {
   private_key = data.aws_secretsmanager_secret_version.ec2_private_key.secret_string
 }
  */
@@ -43,8 +60,8 @@ module "vpc" {
   vpc_single_nat_gateway   = var.vpc_single_nat_gateway
   vpc_enable_dns_hostnames = var.vpc_enable_dns_hostnames
   vpc_common_tags          = local.common_tags
-  vpc_tags                 = var.vpc_tags
-  vpc_igw_tags             = var.vpc_igw_tags
+  public_subnet_tags       = local.public_subnet_tags
+  private_subnet_tags      = local.private_subnet_tags
 }
 
 # Create an AMI data for latest linux image from amazon
@@ -77,7 +94,12 @@ module "ssh_security" {
   security_group_name = "${local.security_group_tags.name}-ssh"
   vpc_id              = module.vpc.vpc_id
   allowed_ports       = var.allowed_ssh_ports
-  security_group_tags = merge(local.common_tags, local.security_group_tags)
+  security_group_tags = merge(
+    local.common_tags,
+    {
+      name = "ssh-security-group-${var.environment}"
+    }
+  )
 }
 
 module "http_security" {
@@ -85,11 +107,16 @@ module "http_security" {
   security_group_name = "${local.security_group_tags.name}-tcp"
   vpc_id              = module.vpc.vpc_id
   allowed_ports       = var.allowed_http_ports
-  security_group_tags = merge(local.common_tags, local.security_group_tags)
+  security_group_tags = merge(
+    local.common_tags,
+    {
+      name = "tcp-security-group-${var.environment}"
+    }
+  )
 }
 
 # Create iam role to jenkins instance to be able to do actions on ec2 instances
-module "iam_jenkins_role" {
+module "iam" {
   source = "./modules/iam"
 }
 
@@ -104,7 +131,8 @@ resource "aws_instance" "jenkins_instance" {
   ]
   subnet_id            = module.vpc.public_subnets[0]
   key_name             = aws_key_pair.ec2_key_pair.key_name
-  iam_instance_profile = module.iam_jenkins_role.iam_jenkins_instance_profile_name
+  iam_instance_profile = module.iam.iam_jenkins_instance_profile_name
+  associate_public_ip_address = true
 
   tags = merge(local.common_tags, {
     Name = "${var.jenkins_instance_names[count.index]}"
@@ -120,9 +148,10 @@ resource "aws_instance" "ansible_control_plane" {
   ]
   subnet_id = module.vpc.public_subnets[0]
   key_name  = aws_key_pair.ec2_key_pair.key_name
+  associate_public_ip_address = true
 
   tags = merge(local.common_tags, {
-    Name = "ansible"
+    Name = "bastion-host-ansible"
   })
 
   depends_on = [
@@ -312,21 +341,26 @@ resource "null_resource" "install_jenkins" {
   null_resource.transfer_jenkins_slave_playbook]
 }
 
-/* 
+
 # Setup Kubernetes Cluster
 module "kubernetes_cluster" {
   source          = "./modules/eks"
-  kubernetes_tags = security_group_tags =  merge(local.common_tags, local.kubernetes_tags)
+  kubernetes_tags = merge(local.common_tags, local.kubernetes_tags)
 
-  vpc_id                    = module.vpc.vpc_id
-  private_subnets           = module.vpc.private_subnets
-  has_cluster_public_access = true
+  vpc_id                         = module.vpc.vpc_id
+  subnet_ids                     = module.vpc.private_subnets
+  cluster_endpoint_public_access = true
+
+  iam_role_arn = module.iam.iam_eks_worker_role_arn
 }
 
 resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" {
+
   triggers = {
+    kubernetes_cluster_created     = "${module.kubernetes_cluster.cluster_id}"
     jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
     jenkins_slave_install_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-install-clis.yml"))
+    iam_jenkins_role_created       = "${module.iam.iam_jenkins_instance_profile_name}"
   }
 
   connection {
@@ -353,15 +387,14 @@ resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" 
   provisioner "remote-exec" {
 
     inline = [
-      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-clis.yml",
-      "echo 'AWS CLI and Kubectl CLI installation on Jenkins slave instance is Complete'"
+      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-clis.yml --extra-vars 'aws_region=${var.region} eks_cluster_name=${local.kubernetes_tags.cluster_name}'",
+      "echo 'AWS CLI and Kubectl CLI installation on Jenkins slave instance is Complete'",
     ]
   }
 
-  depends_on = [aws_instance.ansible_control_plane, module.kubernetes_cluster]
+  depends_on = [aws_instance.ansible_control_plane, module.iam, module.kubernetes_cluster]
 }
 
- */
 moved {
   from = aws_security_group.ec2_instance_ssh_sg
   to   = module.ssh_security.aws_security_group.security_group
@@ -390,4 +423,9 @@ moved {
 moved {
   from = aws_vpc_security_group_egress_rule.ec2_tcp_outbound
   to   = module.http_security.aws_vpc_security_group_egress_rule.eggress_rule
+}
+
+moved {
+  from = module.iam_jenkins_role
+  to   = module.iam
 }

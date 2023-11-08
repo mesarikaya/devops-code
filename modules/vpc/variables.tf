@@ -18,6 +18,16 @@ variable "vpc_private_subnets" {
   type        = list(string)
 }
 
+variable "public_subnet_tags" {
+  description = "Public subnet tags for VPC"
+  type = map(string)
+}
+
+variable "private_subnet_tags" {
+  description = "Private subnet tags for VPC"
+  type = map(string)
+}
+
 variable "vpc_public_subnets" {
   description = "Public subnet for VPC"
   type        = list(string)
@@ -37,18 +47,6 @@ variable "vpc_enable_dns_hostnames" {
   description = "Enable DNS hostnames for VPC"
   type        = bool
 }
-
-
-variable "vpc_tags" {
-  description = "Tags to apply to resources created by VPC module"
-  type        = map(string)
-}
-
-variable "vpc_igw_tags" {
-  description = "Tags to apply to Internet Gateway"
-  type        = map(string)
-}
-
 
 variable "vpc_common_tags" {
   description = "Common Tags for VPC"

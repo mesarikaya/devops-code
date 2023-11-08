@@ -12,12 +12,15 @@ module "vpc" {
   enable_nat_gateway      = var.vpc_enable_nat_gateway
   single_nat_gateway      = var.vpc_single_nat_gateway
   enable_dns_hostnames    = var.vpc_enable_dns_hostnames
+  enable_dns_support   = true
   enable_vpn_gateway      = false
   map_public_ip_on_launch = true
 
   create_igw = true
 
-  tags     = merge(var.vpc_common_tags, var.vpc_tags)
-  igw_tags = merge(var.vpc_common_tags, var.vpc_igw_tags)
+  tags     = merge(var.vpc_common_tags)
+  igw_tags = merge(var.vpc_common_tags)
+  public_subnet_tags = var.public_subnet_tags
+  private_subnet_tags = var.private_subnet_tags
 }
 

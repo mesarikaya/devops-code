@@ -8,11 +8,11 @@ output "jenkins_ec2_public_ip" {
 }
 
 output "jenkins_private_ip" {
-  description = "The Public IP address used to access jenkins master EC2 instance"
+  description = "The Private IP address used to access jenkins master EC2 instance"
   value       = aws_instance.jenkins_instance[0].private_ip
 }
 output "jenkins_slave_private_ip" {
-  description = "The Public IP address used to access jenkins slave EC2 instance"
+  description = "The Private IP address used to access jenkins slave EC2 instance"
   value       = aws_instance.jenkins_instance[1].private_ip
 }
 

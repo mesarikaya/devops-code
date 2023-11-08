@@ -11,7 +11,7 @@ variable "environment" {
 # Define a list of ports you want to allow
 variable "allowed_http_ports" {
   type    = list(number)
-  default = [8080, 8000]
+  default = [8080, 8000, 80, 443]
 }
 
 variable "allowed_ssh_ports" {
@@ -26,19 +26,19 @@ variable "vpc_name" {
 }
 
 variable "vpc_cidr" {
-  default     = "10.0.0.0/16"
+  default     = "10.1.0.0/16"
   description = "CIDR block for VPC"
   type        = string
 }
 
 variable "vpc_private_subnets" {
-  default     = ["10.0.3.0/24", "10.0.4.0/24"]
+  default     = ["10.1.3.0/24", "10.1.4.0/24"]
   description = "Private subnet for VPC"
   type        = list(string)
 }
 
 variable "vpc_public_subnets" {
-  default     = ["10.0.101.0/24", "10.0.102.0/24"]
+  default     = ["10.1.101.0/24", "10.1.102.0/24"]
   description = "Public subnet for VPC"
   type        = list(string)
 }
@@ -46,35 +46,19 @@ variable "vpc_public_subnets" {
 variable "vpc_enable_nat_gateway" {
   description = "Enable NAT gateway for VPC"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "vpc_single_nat_gateway" {
   description = "Single NAT gateway for VPC"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "vpc_enable_dns_hostnames" {
   description = "Enable DNS hostnames for VPC"
   type        = bool
   default     = true
-}
-
-variable "vpc_tags" {
-  description = "Tags to apply to resources created by VPC module"
-  type        = map(string)
-  default = {
-    Name = "devops-vpc"
-  }
-}
-
-variable "vpc_igw_tags" {
-  description = "Tags to apply to Internet Gateway"
-  type        = map(string)
-  default = {
-    Name = "devops-igw"
-  }
 }
 
 variable "ec2_public_key" {
