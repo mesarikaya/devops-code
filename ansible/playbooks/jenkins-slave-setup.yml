@@ -34,11 +34,35 @@
         state: started
         enabled: yes
 
+    # Jenkins and Docker Permissions
+    - name: Create Jenkins group
+      group:
+        name: jenkins
+        state: present
+
+    - name: Add Jenkins user to the docker group
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+
+    - name: Set systemd override for Docker service
+      systemd:
+        name: docker
+        daemon_reload: yes
+        state: restarted
+      become: true
+
     - name: Give 777 permissions on /var/run/docker.sock
       file:
         path: /var/run/docker.sock
         state: file
         mode: 0777
+
+    - name: Restart Docker service
+      service:
+        name: docker
+        state: restarted
 
     - name: Start docker on boot time
       service:

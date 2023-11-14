@@ -6,22 +6,22 @@ locals {
     Project     = "devops-code-project"
   }
   kubernetes_tags = {
-    cluster_name = "devops-cluster-${var.environment}"
+    cluster_name = "${var.environment}-devops-cluster"
   }
   security_group_tags = {
-    name = "security_group-${var.environment}"
+    name = "${var.environment}-security_group"
   }
 
   public_subnet_tags = {
-    "devops/infra/devops-kubernetes-${var.environment}" = "shared"
-    "kubernetes.io/role/elb"                            = 1
-    "type"                                              = "public"
+    "kubernetes.io/cluster/${var.environment}-devops-cluster" = "shared"
+    "kubernetes.io/role/elb"                                  = 1
+    "type"                                                    = "public"
   }
 
   private_subnet_tags = {
-    "devops/infra/devops-kubernetes-${var.environment}" = "shared"
-    "kubernetes.io/role/internal-elb"                   = 1
-    "type"                                              = "private"
+    "kubernetes.io/cluster/${var.environment}-devops-cluster" = "shared"
+    "kubernetes.io/role/internal-elb"                         = 1
+    "type"                                                    = "private"
   }
 }
 
@@ -129,9 +129,9 @@ resource "aws_instance" "jenkins_instance" {
     module.ssh_security.security_group_id,
     module.http_security.security_group_id
   ]
-  subnet_id            = module.vpc.public_subnets[0]
-  key_name             = aws_key_pair.ec2_key_pair.key_name
-  iam_instance_profile = module.iam.iam_jenkins_instance_profile_name
+  subnet_id                   = module.vpc.public_subnets[0]
+  key_name                    = aws_key_pair.ec2_key_pair.key_name
+  iam_instance_profile        = module.iam.iam_jenkins_instance_profile_name
   associate_public_ip_address = true
 
   tags = merge(local.common_tags, {
@@ -146,8 +146,8 @@ resource "aws_instance" "ansible_control_plane" {
   vpc_security_group_ids = [
     module.ssh_security.security_group_id,
   ]
-  subnet_id = module.vpc.public_subnets[0]
-  key_name  = aws_key_pair.ec2_key_pair.key_name
+  subnet_id                   = module.vpc.public_subnets[0]
+  key_name                    = aws_key_pair.ec2_key_pair.key_name
   associate_public_ip_address = true
 
   tags = merge(local.common_tags, {
@@ -333,25 +333,47 @@ resource "null_resource" "install_jenkins" {
     ]
   }
 
-  depends_on = [aws_instance.ansible_control_plane,
+  depends_on = [
+    aws_instance.ansible_control_plane,
     aws_instance.jenkins_instance[0],
     aws_instance.jenkins_instance[1],
     null_resource.generate_hosts_file,
     null_resource.transfer_jenkins_master_playbook,
-  null_resource.transfer_jenkins_slave_playbook]
+    null_resource.transfer_jenkins_slave_playbook
+  ]
 }
 
 
 # Setup Kubernetes Cluster
-module "kubernetes_cluster" {
+/* module "kubernetes_cluster" {
   source          = "./modules/eks"
   kubernetes_tags = merge(local.common_tags, local.kubernetes_tags)
 
   vpc_id                         = module.vpc.vpc_id
   subnet_ids                     = module.vpc.private_subnets
   cluster_endpoint_public_access = true
+  cluster_service_ipv4_cidr      = var.cluster_cidr
 
   iam_role_arn = module.iam.iam_eks_worker_role_arn
+} */
+
+
+module "kubernetes_cluster" {
+  source                           = "./modules/eks"
+  environment                      = var.environment
+  kubernetes_tags                  = local.kubernetes_tags
+  cluster_master_role_arn          = module.iam.iam_eks_master_role_arn
+  cluster_node_role_arn            = module.iam.iam_eks_worker_role_arn
+  ec2_ssh_key                      = aws_key_pair.ec2_key_pair.key_name
+  ec2_ssh_security_group_ids       = [module.ssh_security.security_group_id]
+  node_group_name                  = "${local.kubernetes_tags.cluster_name}-node-group"
+  subnet_ids                       = module.vpc.private_subnets
+  eks_cluster_policy               = module.iam.eks_cluster_policy
+  eks_service_policy               = module.iam.eks_service_policy
+  eks_vpc_resource_controller      = module.iam.eks_vpc_resource_controller
+  eks_worker_node_policy           = module.iam.eks_worker_node_policy
+  eks_cni_policy                   = module.iam.eks_cni_policy
+  eks_container_registry_read_only = module.iam.eks_container_registry_read_only
 }
 
 resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" {
@@ -393,6 +415,21 @@ resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" 
   }
 
   depends_on = [aws_instance.ansible_control_plane, module.iam, module.kubernetes_cluster]
+}
+
+
+# Create CodeArtifactory
+module "code_artifactory" {
+  source                         = "./modules/codeartifactory"
+  artifact_domain_key            = "devops-domain-key-${var.environment}"
+  artifact_domain                = "${var.domain_name}-${var.environment}"
+  maven_artifact_repository_name = "${var.environment}-maven-repo-${var.codeartifact_repository_name}"
+  npm_artifact_repository_name   = "${var.environment}-npm-repo-${var.codeartifact_repository_name}"
+}
+
+module "container_repository" {
+  source                    = "./modules/container_repository"
+  container_repository_name = "${var.environment}-devops-container-repository"
 }
 
 moved {

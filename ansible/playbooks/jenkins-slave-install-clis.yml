@@ -18,7 +18,7 @@
     - name: Install unzip on Ubuntu
       apt:
         name: unzip
-
+    #
     - name: Check if AWS CLI is installed
       shell: aws --version
       ignore_errors: true

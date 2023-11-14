@@ -31,6 +31,12 @@ variable "vpc_cidr" {
   type        = string
 }
 
+variable "cluster_cidr" {
+  default     = "10.0.0.0/16"
+  description = "CIDR block for VPC"
+  type        = string
+}
+
 variable "vpc_private_subnets" {
   default     = ["10.1.3.0/24", "10.1.4.0/24"]
   description = "Private subnet for VPC"
@@ -77,12 +83,20 @@ variable "jenkins_instance_names" {
   default = ["jenkins-master", "jenkins-slave"]
 }
 
-variable "JENKINS_USERNAME" {
-  description = "Jenkins username"
-  sensitive   = true
+variable "artifactory_name" {
+  description = "Code Artifactory name"
+  type        = string
+  default     = "devops-code-artifactory"
 }
 
-variable "JENKINS_PASSWORD" {
-  description = "Jenkins password"
-  sensitive   = true
+variable "domain_name" {
+  description = "Code Artifactory Domain"
+  type        = string
+  default     = "devops-code-artifactory-domain"
+}
+
+variable "codeartifact_repository_name" {
+  description = "Code Artifactory Name"
+  type        = string
+  default     = "devops-code-artifactory-name"
 }

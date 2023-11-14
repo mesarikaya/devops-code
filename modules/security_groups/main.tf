@@ -4,7 +4,7 @@ resource "aws_security_group" "security_group" {
   vpc_id = var.vpc_id
 
   tags = var.security_group_tags
-  /* lifecycle {
+/*   lifecycle {
     create_before_destroy = true
   } */
 }

@@ -1,4 +1,4 @@
-module "eks" {
+/*module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "19.19.0"
 
@@ -54,4 +54,47 @@ resource "aws_eks_addon" "ebs-csi" {
     "Eks:Addon" = "ebs-csi"
     "Terraform" = "true"
   }
+}*/
+
+###############################################################################################################
+resource "aws_eks_cluster" "eks_cluster" {
+  name =  var.kubernetes_tags.cluster_name
+  role_arn = var.cluster_master_role_arn
+
+  vpc_config {
+    subnet_ids = var.subnet_ids
+  }
+  
+  depends_on = [var.eks_cluster_policy, var.eks_service_policy, var.eks_vpc_resource_controller]
+}
+#################################################################################################################
+
+resource "aws_eks_node_group" "eks_backend" {
+  cluster_name    = aws_eks_cluster.eks_cluster.name
+  node_group_name = var.node_group_name
+  node_role_arn   = var.cluster_node_role_arn
+  subnet_ids = var.subnet_ids
+  capacity_type = "SPOT"
+  disk_size = "20"
+  instance_types = ["t3.small"]
+  remote_access {
+    ec2_ssh_key = var.ec2_ssh_key
+    source_security_group_ids = var.ec2_ssh_security_group_ids
+  } 
+  
+  labels =  tomap(var.kubernetes_tags)
+  
+  scaling_config {
+    desired_size = 1
+    max_size     = 3
+    min_size     = 1
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  tags = {name = "${var.environment}-cluster-node"}
+
+  depends_on = [var.eks_worker_node_policy, var.eks_cni_policy, var.eks_container_registry_read_only]
 }

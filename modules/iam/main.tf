@@ -77,7 +77,7 @@ resource "aws_iam_policy" "eks_access_policy" {
             "eks:ListClusters",
             "eks:DescribeAddonVersions",
             "eks:ListIdentityProviderConfigs",
-            "eks:AssociateIdentityProviderConfig"
+            "eks:AssociateIdentityProviderConfig",
           ],
           "Resource": "arn:aws:eks:eu-west-1:880787496735:cluster/*"
         }
@@ -100,9 +100,58 @@ resource "aws_iam_role_policy_attachment" "AmazonEKSClusterPolicy" {
 
 
 
+# Create IAM setup for eks master and worker nodes
+resource "aws_iam_role" "eks_master" {
+  name = "eks-master-role"
 
+  assume_role_policy = jsonencode({
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Service": "eks.amazonaws.com"
+          },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }
+  )
 
-# Create IAM setup for eks worker nodes
+  // Additional inline policy to grant route table permissions
+  inline_policy {
+    name = "eks-master-route-table-policy"
+    policy = jsonencode({
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ec2:DescribeRouteTables",
+            "ec2:DescribeAvailabilityZones",
+            "ec2:CreateSecurityGroup",
+            "ec2:CreateTags",
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress",
+            "elasticloadbalancing:*"
+          ],
+          "Resource": "*"
+        }
+      ]
+    })
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "AmazonEKSServicePolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
+  role       = aws_iam_role.eks_master.name
+}
+
+resource "aws_iam_role_policy_attachment" "AmazonEKSVPCResourceController" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
+  role       = aws_iam_role.eks_master.name
+}
+
 resource "aws_iam_role" "eks_worker_role" {
   name = "eks_worker_role"
 
