@@ -133,6 +133,7 @@ resource "aws_instance" "jenkins_instance" {
   key_name                    = aws_key_pair.ec2_key_pair.key_name
   iam_instance_profile        = module.iam.iam_jenkins_instance_profile_name
   associate_public_ip_address = true
+  disable_api_termination = true
 
   tags = merge(local.common_tags, {
     Name = "${var.jenkins_instance_names[count.index]}"
@@ -197,10 +198,14 @@ resource "null_resource" "transfer_private_key" {
 resource "null_resource" "generate_hosts_file" {
 
   triggers = {
+    always_run = "${timestamp()}"
+  }
+
+  /* triggers = {
     ansible_instance_created        = "${aws_instance.ansible_control_plane.id}"
     jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
     jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
-  }
+  } */
 
   connection {
     type        = "ssh"
@@ -414,7 +419,53 @@ resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" 
     ]
   }
 
-  depends_on = [aws_instance.ansible_control_plane, module.iam, module.kubernetes_cluster]
+  depends_on = [aws_instance.jenkins_instance[1], module.iam, module.kubernetes_cluster]
+}
+
+
+resource "null_resource" "transfer_jenkins_slave_deploy_monitoring_stack" {
+
+  triggers = {
+    kubernetes_cluster_created     = "${module.kubernetes_cluster.cluster_id}"
+    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
+    jenkins_slave_install_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-install-monitoring-stack.yml"))
+    iam_jenkins_role_created       = "${module.iam.iam_jenkins_instance_profile_name}"
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  # Transfer jenkins playbook
+  provisioner "file" {
+    source      = "${path.module}/ansible/playbooks/jenkins-slave-install-monitoring-stack.yml"
+    destination = "/tmp/jenkins-slave-install-monitoring-stack.yml"
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo mv /tmp/jenkins-slave-install-monitoring-stack.yml /opt/jenkins-slave-install-monitoring-stack.yml",
+      "sudo chown root:root /opt/jenkins-slave-install-monitoring-stack.yml",
+    ]
+  }
+
+  provisioner "remote-exec" {
+
+    inline = [
+      "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-monitoring-stack.yml --extra-vars 'aws_region=${var.region} eks_cluster_name=${local.kubernetes_tags.cluster_name}'",
+      "echo 'Monitoring Stack installation is complete on slave instance'",
+    ]
+  }
+
+  depends_on = [
+    aws_instance.jenkins_instance[1],
+    module.iam, module.kubernetes_cluster,
+    null_resource.generate_hosts_file
+  ]
 }
 
 

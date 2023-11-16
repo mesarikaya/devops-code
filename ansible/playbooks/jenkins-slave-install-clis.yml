@@ -1,6 +1,8 @@
 ---
 - hosts: jenkins-slave
   become: true
+  become_user: ubuntu
+  gather_facts: true
 
   tasks:
     - name: Check if kubectl is installed
@@ -36,9 +38,8 @@
         aws eks --region {{ aws_region }} update-kubeconfig --name {{ eks_cluster_name }}
       when: awscli_check.rc == 0 and kubectl_check.rc == 0 # Only run if kubectl and awscli installation was successful
       register: kubectl_config_output
-      become: true
       become_user: ubuntu
-
+    #
     - name: Print kubectl configuration output
       debug:
         var: kubectl_config_output.stdout

@@ -22,7 +22,7 @@
         src: /opt/apache-maven-3.9.5-bin.tar.gz
         dest: /opt
         remote_src: yes
-
+    #
     - name: Install Docker
       apt:
         name: docker.io
