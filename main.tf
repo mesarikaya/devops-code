@@ -120,6 +120,29 @@ module "iam" {
   source = "./modules/iam"
 }
 
+#Create Ansible Instance
+resource "aws_instance" "ansible_control_plane" {
+  ami           = data.aws_ami.latest_amazon_linux_x86.id
+  instance_type = "t3.micro"
+  vpc_security_group_ids = [
+    module.ssh_security.security_group_id,
+  ]
+  subnet_id                   = module.vpc.public_subnets[0]
+  key_name                    = aws_key_pair.ec2_key_pair.key_name
+  associate_public_ip_address = true
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "bastion-host-ansible"
+  })
+
+  user_data                   = file("scripts/ansible_setup.sh")
+  user_data_replace_on_change = true
+}
+
 # Create Jenkins master and slave instances
 resource "aws_instance" "jenkins_instance" {
   count         = var.jenkins_ec2_instance_count
@@ -133,40 +156,24 @@ resource "aws_instance" "jenkins_instance" {
   key_name                    = aws_key_pair.ec2_key_pair.key_name
   iam_instance_profile        = module.iam.iam_jenkins_instance_profile_name
   associate_public_ip_address = true
-  disable_api_termination = true
+  disable_api_termination     = true
+
+  metadata_options {
+    http_tokens = "required"
+  }
 
   tags = merge(local.common_tags, {
     Name = "${var.jenkins_instance_names[count.index]}"
   })
+
+  depends_on = [aws_instance.ansible_control_plane ]
 }
 
-#Create Ansible Instance
-resource "aws_instance" "ansible_control_plane" {
-  ami           = data.aws_ami.latest_amazon_linux_x86.id
-  instance_type = "t3.micro"
-  vpc_security_group_ids = [
-    module.ssh_security.security_group_id,
-  ]
-  subnet_id                   = module.vpc.public_subnets[0]
-  key_name                    = aws_key_pair.ec2_key_pair.key_name
-  associate_public_ip_address = true
-
-  tags = merge(local.common_tags, {
-    Name = "bastion-host-ansible"
-  })
-
-  depends_on = [
-    aws_instance.jenkins_instance
-  ]
-
-  user_data                   = file("scripts/ansible_setup.sh")
-  user_data_replace_on_change = true
-}
 
 #Transfer private key to allow ansible control the nodes"
 resource "null_resource" "transfer_private_key" {
   triggers = {
-    ansible_instance_created = "${aws_instance.ansible_control_plane.id}"
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -200,12 +207,6 @@ resource "null_resource" "generate_hosts_file" {
   triggers = {
     always_run = "${timestamp()}"
   }
-
-  /* triggers = {
-    ansible_instance_created        = "${aws_instance.ansible_control_plane.id}"
-    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
-    jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
-  } */
 
   connection {
     type        = "ssh"
@@ -245,8 +246,7 @@ resource "null_resource" "generate_hosts_file" {
 # Transfer playbooks 
 resource "null_resource" "transfer_jenkins_master_playbook" {
   triggers = {
-    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
-    jenkins_master_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-master-setup.yml"))
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -275,8 +275,7 @@ resource "null_resource" "transfer_jenkins_master_playbook" {
 
 resource "null_resource" "transfer_jenkins_slave_playbook" {
   triggers = {
-    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
-    jenkins_slave_playbook         = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-setup.yml"))
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -305,15 +304,8 @@ resource "null_resource" "transfer_jenkins_slave_playbook" {
 
 resource "null_resource" "install_jenkins" {
 
-  /*   triggers = {
-    always_run = "${timestamp()}"
-  } */
-
   triggers = {
-    jenkins_instance_master_created = "${aws_instance.jenkins_instance[0].id}"
-    jenkins_instance_slave_created  = "${aws_instance.jenkins_instance[1].id}"
-    install_jenkins_created         = "${null_resource.transfer_jenkins_master_playbook.id}"
-    install_slave_jenkins_created   = "${null_resource.transfer_jenkins_slave_playbook.id}"
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -332,7 +324,39 @@ resource "null_resource" "install_jenkins" {
       "  sleep 5",
       "done",
       "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-master-setup.yml",
-      "echo 'Jenkins master installation Complete'",
+      "echo 'Jenkins master installation Complete'"
+    ]
+  }
+
+  depends_on = [
+    aws_instance.ansible_control_plane,
+    aws_instance.jenkins_instance[0],
+    null_resource.generate_hosts_file,
+    null_resource.transfer_jenkins_master_playbook
+  ]
+}
+
+resource "null_resource" "install_jenkins_slave" {
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    private_key = file(".private/ec2_key_pair")
+    host        = aws_instance.ansible_control_plane.public_ip
+  }
+
+  #install jenkins slave librarires
+  provisioner "remote-exec" {
+
+    inline = [
+      "while [ ! -x $(command -v ansible-playbook) ]; do",
+      "  echo 'Waiting for Ansible to become available...'",
+      "  sleep 5",
+      "done",
       "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-setup.yml",
       "echo 'Jenkins slave installation Complete'"
     ]
@@ -340,28 +364,11 @@ resource "null_resource" "install_jenkins" {
 
   depends_on = [
     aws_instance.ansible_control_plane,
-    aws_instance.jenkins_instance[0],
     aws_instance.jenkins_instance[1],
     null_resource.generate_hosts_file,
-    null_resource.transfer_jenkins_master_playbook,
     null_resource.transfer_jenkins_slave_playbook
   ]
 }
-
-
-# Setup Kubernetes Cluster
-/* module "kubernetes_cluster" {
-  source          = "./modules/eks"
-  kubernetes_tags = merge(local.common_tags, local.kubernetes_tags)
-
-  vpc_id                         = module.vpc.vpc_id
-  subnet_ids                     = module.vpc.private_subnets
-  cluster_endpoint_public_access = true
-  cluster_service_ipv4_cidr      = var.cluster_cidr
-
-  iam_role_arn = module.iam.iam_eks_worker_role_arn
-} */
-
 
 module "kubernetes_cluster" {
   source                           = "./modules/eks"
@@ -384,10 +391,7 @@ module "kubernetes_cluster" {
 resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" {
 
   triggers = {
-    kubernetes_cluster_created     = "${module.kubernetes_cluster.cluster_id}"
-    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
-    jenkins_slave_install_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-install-clis.yml"))
-    iam_jenkins_role_created       = "${module.iam.iam_jenkins_instance_profile_name}"
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -414,22 +418,28 @@ resource "null_resource" "transfer_jenkins_slave_install_clis_playbook_and_run" 
   provisioner "remote-exec" {
 
     inline = [
+      "while [ ! -x $(command -v ansible-playbook) ]; do",
+      "  echo 'Waiting for Ansible to become available...'",
+      "  sleep 5",
+      "done",
       "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-clis.yml --extra-vars 'aws_region=${var.region} eks_cluster_name=${local.kubernetes_tags.cluster_name}'",
       "echo 'AWS CLI and Kubectl CLI installation on Jenkins slave instance is Complete'",
     ]
   }
 
-  depends_on = [aws_instance.jenkins_instance[1], module.iam, module.kubernetes_cluster]
+  depends_on = [
+    aws_instance.ansible_control_plane,
+    aws_instance.jenkins_instance[1],
+    module.iam, module.kubernetes_cluster,
+    null_resource.install_jenkins_slave
+  ]
 }
 
 
 resource "null_resource" "transfer_jenkins_slave_deploy_monitoring_stack" {
 
   triggers = {
-    kubernetes_cluster_created     = "${module.kubernetes_cluster.cluster_id}"
-    jenkins_instance_slave_created = "${aws_instance.jenkins_instance[1].id}"
-    jenkins_slave_install_playbook = sha256(file("${path.module}/ansible/playbooks/jenkins-slave-install-monitoring-stack.yml"))
-    iam_jenkins_role_created       = "${module.iam.iam_jenkins_instance_profile_name}"
+    always_run = "${timestamp()}"
   }
 
   connection {
@@ -441,7 +451,7 @@ resource "null_resource" "transfer_jenkins_slave_deploy_monitoring_stack" {
 
   # Transfer jenkins playbook
   provisioner "file" {
-    source      = "${path.module}/ansible/playbooks/jenkins-slave-install-monitoring-stack.yml"
+    source      = "${path.module}/ansible/playbooks/monitoring/jenkins-slave-install-monitoring-stack.yml"
     destination = "/tmp/jenkins-slave-install-monitoring-stack.yml"
   }
 
@@ -456,15 +466,22 @@ resource "null_resource" "transfer_jenkins_slave_deploy_monitoring_stack" {
   provisioner "remote-exec" {
 
     inline = [
+      "while [ ! -x $(command -v ansible-playbook) ]; do",
+      "  echo 'Waiting for Ansible to become available...'",
+      "  sleep 5",
+      "done",
       "sudo ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i /opt/hosts /opt/jenkins-slave-install-monitoring-stack.yml --extra-vars 'aws_region=${var.region} eks_cluster_name=${local.kubernetes_tags.cluster_name}'",
       "echo 'Monitoring Stack installation is complete on slave instance'",
     ]
   }
 
   depends_on = [
+    aws_instance.ansible_control_plane,
     aws_instance.jenkins_instance[1],
     module.iam, module.kubernetes_cluster,
-    null_resource.generate_hosts_file
+    null_resource.generate_hosts_file,
+    null_resource.install_jenkins_slave,
+    null_resource.transfer_jenkins_slave_install_clis_playbook_and_run
   ]
 }
 

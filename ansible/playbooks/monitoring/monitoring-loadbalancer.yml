@@ -1,0 +1,14 @@
+# monitoring-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring-loadbalancer
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus-stack-grafana
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: LoadBalancer

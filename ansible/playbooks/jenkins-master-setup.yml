@@ -1,35 +1,51 @@
----
 - hosts: jenkins-master
   become: true
+  become_user: ubuntu
+  gather_facts: true
+
   tasks:
-    - name: Add Jenkins APT key
-      apt_key:
-        url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
-        state: present
+  - name: Check if OpenJDK 17 is installed
+    command: dpkg -l | grep openjdk-17-jre
+    register: openjdk_installed
+    changed_when: false
 
-    - name: Add Jenkins APT repository
-      apt_repository:
-        repo: "deb https://pkg.jenkins.io/debian-stable binary/"
-        state: present
+  - name: Install OpenJDK 17
+    apt:
+      name: openjdk-17-jre
+      state: present
+    when: openjdk_installed.rc != 0 # Install only if not already installed
 
-    - name: Install OpenJDK 17
-      apt:
-        name: openjdk-17-jre
-        state: present
+  - name: Check if Jenkins is installed
+    command: dpkg -l | grep jenkins
+    register: jenkins_installed
+    changed_when: false
 
-    - name: Install Jenkins
-      apt:
-        name: jenkins
-        state: present
+  - name: Add Jenkins APT key
+    apt_key:
+      url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+      state: present
+    when: jenkins_installed.rc != 0 # Add key only if Jenkins is not already installed
 
-    - name: Start Jenkins service and Enable start at boot time
-      service:
-        name: jenkins
-        state: started
-        enabled: yes
+  - name: Add Jenkins APT repository
+    apt_repository:
+      repo: "deb https://pkg.jenkins.io/debian-stable binary/"
+      state: present
+    when: jenkins_installed.rc != 0 # Add repository only if Jenkins is not already installed
 
-    - name: Restart Jenkins service
-      systemd:
-        name: jenkins
-        state: restarted
-      become: true
+  - name: Install Jenkins
+    apt:
+      name: jenkins
+      state: present
+
+  - name: Start Jenkins service and Enable start at boot time
+    service:
+      name: jenkins
+      state: started
+      enabled: yes
+    when: jenkins_installed.rc != 0 # Install only if not already installed
+
+  - name: Restart Jenkins service
+    systemd:
+      name: jenkins
+      state: restarted
+    become: true

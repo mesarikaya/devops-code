@@ -1,0 +1,93 @@
+- name: Deploy Monitoring Stack
+  hosts: jenkins-slave
+  become: true
+  become_user: ubuntu
+  gather_facts: true
+
+  tasks:
+  - name: Check if kubectl is installed
+    command: kubectl
+    ignore_errors: true
+    register: kubectl_installed
+
+  - name: Fail if kubectl is not installed
+    fail:
+      msg: "kubectl is not installed. Please install kubectl before running this playbook."
+    when: kubectl_installed.rc != 0
+
+  - name: Create monitoring namespace
+    become: true
+    shell: kubectl create namespace monitoring
+    ignore_errors: true # Ignore errors if the namespace already exists
+
+  - name: Check if Helm is installed
+    command: helm
+    ignore_errors: true
+    register: helm_installed
+
+  - name: Install Helm if not installed
+    become: true
+    shell: |
+      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 -o get-helm.sh
+      chmod 700 get-helm.sh
+      ./get-helm.sh
+    args:
+      executable: /bin/bash
+    when: helm_installed.rc != 0
+
+  - name: Create values.yaml for Prometheus Helm chart
+    copy:
+      content: |
+        #prometheus:
+          #service:
+            #type: LoadBalancer
+        # custom-values.yaml
+        prometheus:
+          prometheusSpec:
+            serviceMonitorSelectorNilUsesHelmValues: false
+            serviceMonitorSelector:
+              matchLabels:
+                app: prometheus-stack-grafana
+        grafana:
+          serviceMonitorSelectorNilUsesHelmValues: false
+          serviceMonitorSelector:
+            matchLabels:
+              app: prometheus-stack-grafana
+        #grafana:
+          #service:
+            #type: LoadBalancer
+      dest: ~/values.yaml
+
+  - name: Copy Ingress service yaml to remote
+    copy:
+      src: ansible/playbooks/monitoring/monitoring-ingress.yml
+      dest: /tmp/monitoring-ingress.yaml
+
+  - name: Apply Monitoring Ingress
+    command: kubectl apply -f /tmp/monitoring-ingress.yaml
+
+  - name: Apply LoadBalancer service
+    copy:
+      src: ansible/playbooks/monitoring/monitoring-loadbalancer.yaml
+      dest: /tmp/monitoring-loadbalancer.yaml
+
+  - name: Apply Monitoring LoadBalancer Service
+    command: kubectl apply -f /tmp/monitoring-loadbalancer.yaml
+
+  - name: Check if Prometheus is installed
+    command: helm list -o json | jq '.[] | .name' | grep -q prometheus
+    ignore_errors: true
+    register: prometheus_installed
+
+  - name: Add Prometheus Community Helm repository
+    shell: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    ignore_errors: false
+
+  - name: Check if Prometheus Stack is installed
+    command: helm status prometheus-stack --namespace monitoring
+    ignore_errors: true
+    register: prometheus_status
+
+  - name: Install Prometheus Helm chart if not installed
+    shell: helm install prometheus-stack prometheus-community/kube-prometheus-stack -f ~/values.yaml --namespace monitoring
+    when: prometheus_status.rc != 0
